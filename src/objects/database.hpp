@@ -22,6 +22,11 @@ public:
 			return Backup::Compare(a, b);
 		}
 	};
+	class CompareSession { public:
+		inline bool operator() (Session const * const a, Session const * const b) const {
+			return Session::Compare(a, b);
+		}
+	};
 
 	// Proper error handling logic for when an sqlite3 operation fails.
 	void ThrowDatabaseError();
@@ -38,6 +43,10 @@ public:
 	// Allow Backups to manage themselves when created and garbage collected.
 	inline void AddBackup(Backup* backup) { backups.insert(backups.end(), backup); }
 	inline void RemoveBackup(Backup* backup) { backups.erase(backup); }
+
+	// Allow Sessions to manage themselves when created and garbage collected.
+	inline void AddSession(Session* session) { sessions.insert(sessions.end(), session); }
+	inline void RemoveSession(Session* session) { sessions.erase(session); }
 
 	// A view for Statements to see and modify Database state.
 	// The order of these fields must exactly match their actual order.
@@ -79,6 +88,9 @@ private:
 	static NODE_METHOD(JS_close);
 	static NODE_METHOD(JS_defaultSafeIntegers);
 	static NODE_METHOD(JS_unsafeMode);
+	static NODE_METHOD(JS_createSession);
+	static NODE_METHOD(JS_applyChangeset);
+	static NODE_METHOD(JS_invertChangeset);
 	static NODE_GETTER(JS_open);
 	static NODE_GETTER(JS_inTransaction);
 
@@ -100,4 +112,5 @@ private:
 	const v8::Global<v8::Value> logger;
 	std::set<Statement*, CompareStatement> stmts;
 	std::set<Backup*, CompareBackup> backups;
+	std::set<Session*, CompareSession> sessions;
 };

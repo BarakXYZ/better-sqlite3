@@ -39,6 +39,7 @@ struct Addon {
 	v8::Global<v8::Function> Statement;
 	v8::Global<v8::Function> StatementIterator;
 	v8::Global<v8::Function> Backup;
+	v8::Global<v8::Function> Session;
 	v8::Global<v8::Function> SqliteError;
 	NODE_ARGUMENTS_POINTER privileged_info;
 	sqlite3_uint64 next_id;

@@ -28,7 +28,8 @@ Database::Database(
 	addon(addon),
 	logger(isolate, logger),
 	stmts(),
-	backups() {
+	backups(),
+	sessions() {
 	assert(db_handle != NULL);
 	addon->dbs.insert(this);
 }
@@ -44,8 +45,10 @@ void Database::CloseHandles() {
 		open = false;
 		for (Statement* stmt : stmts) stmt->CloseHandles();
 		for (Backup* backup : backups) backup->CloseHandles();
+		for (Session* session : sessions) session->CloseHandles();
 		stmts.clear();
 		backups.clear();
+		sessions.clear();
 		int status = sqlite3_close(db_handle);
 		assert(status == SQLITE_OK); ((void)status);
 	}
@@ -136,6 +139,9 @@ INIT(Database::Init) {
 	SetPrototypeMethod(isolate, data, t, "close", JS_close);
 	SetPrototypeMethod(isolate, data, t, "defaultSafeIntegers", JS_defaultSafeIntegers);
 	SetPrototypeMethod(isolate, data, t, "unsafeMode", JS_unsafeMode);
+	SetPrototypeMethod(isolate, data, t, "createSession", JS_createSession);
+	SetPrototypeMethod(isolate, data, t, "applyChangeset", JS_applyChangeset);
+	SetPrototypeMethod(isolate, data, t, "invertChangeset", JS_invertChangeset);
 	SetPrototypeGetter(isolate, data, t, "open", JS_open);
 	SetPrototypeGetter(isolate, data, t, "inTransaction", JS_inTransaction);
 	return t->GetFunction(OnlyContext).ToLocalChecked();
@@ -414,4 +420,102 @@ NODE_GETTER(Database::JS_open) {
 NODE_GETTER(Database::JS_inTransaction) {
 	Database* db = Unwrap<Database>(info.This());
 	info.GetReturnValue().Set(db->open && !static_cast<bool>(sqlite3_get_autocommit(db->db_handle)));
+}
+
+NODE_METHOD(Database::JS_createSession) {
+	REQUIRE_ARGUMENT_OBJECT(first, v8::Local<v8::Object> database);
+	REQUIRE_ARGUMENT_STRING(second, v8::Local<v8::String> dbName);
+	(void)database;
+	(void)dbName;
+	UseAddon;
+	UseIsolate;
+	v8::Local<v8::Function> c = addon->Session.Get(isolate);
+	addon->privileged_info = &info;
+	v8::MaybeLocal<v8::Object> maybeSession = c->NewInstance(OnlyContext, 0, NULL);
+	addon->privileged_info = NULL;
+	if (!maybeSession.IsEmpty()) info.GetReturnValue().Set(maybeSession.ToLocalChecked());
+}
+
+// Custom destructor for sqlite3_free used by changeset operations
+static void FreeChangesetMemory(char* data, void* hint) {
+	sqlite3_free(data);
+}
+
+NODE_METHOD(Database::JS_applyChangeset) {
+	Database* db = Unwrap<Database>(info.This());
+	REQUIRE_DATABASE_OPEN(db);
+	REQUIRE_DATABASE_NOT_BUSY(db);
+
+	if (info.Length() == 0 || !node::Buffer::HasInstance(info[0])) {
+		return ThrowTypeError("Expected first argument to be a Buffer");
+	}
+
+	v8::Local<v8::Object> buffer = info[0].As<v8::Object>();
+	int size = static_cast<int>(node::Buffer::Length(buffer));
+	void* data = node::Buffer::Data(buffer);
+
+	// Conflict handler - default to REPLACE (consistent with expo-sqlite)
+	auto onConflict = [](void* pCtx, int eConflict, sqlite3_changeset_iter* pIter) -> int {
+		return SQLITE_CHANGESET_REPLACE;
+	};
+
+	int status = sqlite3changeset_apply(
+		db->db_handle,
+		size,
+		data,
+		NULL,        // xFilter
+		onConflict,  // xConflict
+		NULL         // pCtx
+	);
+
+	if (status != SQLITE_OK) {
+		db->ThrowDatabaseError();
+	}
+}
+
+NODE_METHOD(Database::JS_invertChangeset) {
+	Database* db = Unwrap<Database>(info.This());
+	(void)db; // db is only used for addon access pattern consistency
+
+	if (info.Length() == 0 || !node::Buffer::HasInstance(info[0])) {
+		return ThrowTypeError("Expected first argument to be a Buffer");
+	}
+
+	v8::Local<v8::Object> buffer = info[0].As<v8::Object>();
+	int inSize = static_cast<int>(node::Buffer::Length(buffer));
+	void* inData = node::Buffer::Data(buffer);
+
+	int outSize = 0;
+	void* outData = NULL;
+
+	int status = sqlite3changeset_invert(inSize, inData, &outSize, &outData);
+
+	if (status != SQLITE_OK) {
+		UseAddon;
+		ThrowSqliteError(addon, sqlite3_errstr(status), status);
+		return;
+	}
+
+	UseIsolate;
+
+	if (outData == NULL || outSize == 0) {
+		if (outData) sqlite3_free(outData);
+		info.GetReturnValue().Set(v8::Undefined(isolate));
+		return;
+	}
+
+	auto result = SAFE_NEW_BUFFER(
+		isolate,
+		reinterpret_cast<char*>(outData),
+		outSize,
+		FreeChangesetMemory,
+		NULL
+	);
+
+	if (result.IsEmpty()) {
+		sqlite3_free(outData);
+		return ThrowError("Failed to create buffer for inverted changeset");
+	}
+
+	info.GetReturnValue().Set(result.ToLocalChecked());
 }

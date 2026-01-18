@@ -17,6 +17,7 @@ class Database;
 class Statement;
 class StatementIterator;
 class Backup;
+class Session;
 
 #include "util/macros.cpp"
 #include "util/helpers.cpp"
@@ -29,6 +30,7 @@ class Backup;
 #endif
 
 #include "objects/backup.hpp"
+#include "objects/session.hpp"
 #include "objects/statement.hpp"
 #include "objects/database.hpp"
 #include "addon.cpp"
@@ -41,6 +43,7 @@ class Backup;
 #include "util/binder.cpp"
 
 #include "objects/backup.cpp"
+#include "objects/session.cpp"
 #include "objects/statement.cpp"
 #include "objects/database.cpp"
 #include "objects/statement-iterator.cpp"
@@ -65,10 +68,12 @@ NODE_MODULE_INIT(/* exports, context */) {
 	exports->Set(context, InternalizedFromLatin1(isolate, "Statement"), Statement::Init(isolate, data)).FromJust();
 	exports->Set(context, InternalizedFromLatin1(isolate, "StatementIterator"), StatementIterator::Init(isolate, data)).FromJust();
 	exports->Set(context, InternalizedFromLatin1(isolate, "Backup"), Backup::Init(isolate, data)).FromJust();
+	exports->Set(context, InternalizedFromLatin1(isolate, "Session"), Session::Init(isolate, data)).FromJust();
 	exports->Set(context, InternalizedFromLatin1(isolate, "setErrorConstructor"), v8::FunctionTemplate::New(isolate, Addon::JS_setErrorConstructor, data)->GetFunction(context).ToLocalChecked()).FromJust();
 
 	// Store addon instance data.
 	addon->Statement.Reset(isolate, exports->Get(context, InternalizedFromLatin1(isolate, "Statement")).ToLocalChecked().As<v8::Function>());
 	addon->StatementIterator.Reset(isolate, exports->Get(context, InternalizedFromLatin1(isolate, "StatementIterator")).ToLocalChecked().As<v8::Function>());
 	addon->Backup.Reset(isolate, exports->Get(context, InternalizedFromLatin1(isolate, "Backup")).ToLocalChecked().As<v8::Function>());
+	addon->Session.Reset(isolate, exports->Get(context, InternalizedFromLatin1(isolate, "Session")).ToLocalChecked().As<v8::Function>());
 }

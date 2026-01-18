@@ -9,6 +9,10 @@
       'target_name': 'better_sqlite3',
       'dependencies': ['deps/sqlite3.gyp:sqlite3'],
       'sources': ['src/better_sqlite3.cpp'],
+      'defines': [
+        'SQLITE_ENABLE_SESSION',
+        'SQLITE_ENABLE_PREUPDATE_HOOK',
+      ],
       'cflags_cc': ['-std=c++20'],
       'xcode_settings': {
         'OTHER_CPLUSPLUSFLAGS': ['-std=c++20', '-stdlib=libc++'],
