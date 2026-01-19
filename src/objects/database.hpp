@@ -80,6 +80,7 @@ private:
 	static NODE_METHOD(JS_prepare);
 	static NODE_METHOD(JS_exec);
 	static NODE_METHOD(JS_backup);
+	static NODE_METHOD(JS_backupFrom);
 	static NODE_METHOD(JS_serialize);
 	static NODE_METHOD(JS_deserialize);
 	static NODE_METHOD(JS_function);

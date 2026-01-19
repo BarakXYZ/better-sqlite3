@@ -131,6 +131,7 @@ INIT(Database::Init) {
 	SetPrototypeMethod(isolate, data, t, "prepare", JS_prepare);
 	SetPrototypeMethod(isolate, data, t, "exec", JS_exec);
 	SetPrototypeMethod(isolate, data, t, "backup", JS_backup);
+	SetPrototypeMethod(isolate, data, t, "backupFrom", JS_backupFrom);
 	SetPrototypeMethod(isolate, data, t, "serialize", JS_serialize);
 	SetPrototypeMethod(isolate, data, t, "deserialize", JS_deserialize);
 	SetPrototypeMethod(isolate, data, t, "function", JS_function);
@@ -296,6 +297,85 @@ NODE_METHOD(Database::JS_serialize) {
 	);
 }
 
+NODE_METHOD(Database::JS_backupFrom) {
+	// Synchronous backup from another database to this database.
+	// Matches wa-sqlite's sqlite3.backup(dest, destName, source, sourceName) pattern.
+	// Uses SQLite backup API: sqlite3_backup_init, sqlite3_backup_step, sqlite3_backup_finish.
+
+	Database* destDb = Unwrap<Database>(info.This());
+	REQUIRE_DATABASE_OPEN(destDb);
+	REQUIRE_DATABASE_NOT_BUSY(destDb);
+	REQUIRE_DATABASE_NO_ITERATORS(destDb);
+
+	UseAddon;
+	UseIsolate;
+
+	// First argument: source Database object
+	// Validate using wa-sqlite's verifyDatabase pattern: check if pointer is in tracked set
+	if (info.Length() < 1 || !info[0]->IsObject()) {
+		ThrowTypeError("Expected first argument to be a Database instance");
+		return;
+	}
+	v8::Local<v8::Object> srcObj = info[0].As<v8::Object>();
+	if (srcObj->InternalFieldCount() < 1) {
+		ThrowTypeError("Expected first argument to be a Database instance");
+		return;
+	}
+	Database* srcDb = Unwrap<Database>(srcObj);
+	if (addon->dbs.find(srcDb) == addon->dbs.end()) {
+		ThrowTypeError("Expected first argument to be a Database instance");
+		return;
+	}
+	if (!srcDb->open) {
+		ThrowTypeError("The source database is closed");
+		return;
+	}
+
+	// Optional second argument: attached database name for destination (default "main")
+	v8::Local<v8::String> destName;
+	if (info.Length() > 1 && !info[1]->IsUndefined()) {
+		if (!info[1]->IsString()) {
+			ThrowTypeError("Expected second argument to be a string");
+			return;
+		}
+		destName = info[1].As<v8::String>();
+	} else {
+		destName = StringFromUtf8(isolate, "main", -1);
+	}
+	v8::String::Utf8Value dest_name(isolate, destName);
+
+	// Optional third argument: attached database name for source (default "main")
+	v8::Local<v8::String> srcName;
+	if (info.Length() > 2 && !info[2]->IsUndefined()) {
+		if (!info[2]->IsString()) {
+			ThrowTypeError("Expected third argument to be a string");
+			return;
+		}
+		srcName = info[2].As<v8::String>();
+	} else {
+		srcName = StringFromUtf8(isolate, "main", -1);
+	}
+	v8::String::Utf8Value src_name(isolate, srcName);
+
+	// Initialize backup: sqlite3_backup_init(dest, destName, source, sourceName)
+	sqlite3_backup* backup_handle = sqlite3_backup_init(destDb->db_handle, *dest_name, srcDb->db_handle, *src_name);
+	if (backup_handle == NULL) {
+		destDb->ThrowDatabaseError();
+		return;
+	}
+
+	// Copy all pages in one step (-1 = all pages)
+	int status = sqlite3_backup_step(backup_handle, -1);
+	sqlite3_backup_finish(backup_handle);
+
+	if (status != SQLITE_DONE) {
+		ThrowSqliteError(addon, sqlite3_errstr(status), status);
+		return;
+	}
+
+	info.GetReturnValue().Set(info.This());
+}
+
 NODE_METHOD(Database::JS_deserialize) {
 	// Deserialize a buffer into the current database using the safe pattern:
 	// 1. Create temp in-memory database
@@ -304,8 +384,6 @@ NODE_METHOD(Database::JS_deserialize) {
 	// 4. Close temp database
 	//
 	// This preserves file-based persistence and matches wa-sqlite's import pattern.
-	// REF: packages/@livestore/sqlite-wasm/src/make-sqlite-db.ts import implementation
-	// REF: packages/@livestore/wa-sqlite/src/sqlite-api.js backup function
 
 	Database* db = Unwrap<Database>(info.This());
 	REQUIRE_DATABASE_OPEN(db);
@@ -365,9 +443,8 @@ NODE_METHOD(Database::JS_deserialize) {
 		return;
 	}
 
-	// Step 3: Backup from temp to current database
+	// Step 3: Backup from temp to current database (matches wa-sqlite backup pattern)
 	// sqlite3_backup_init(dest, destName, source, sourceName)
-	// REF: wa-sqlite sqlite-api.js - backup(dest, destName, source, sourceName)
 	sqlite3_backup* backup_handle = sqlite3_backup_init(db->db_handle, *attached_name, temp_handle, "main");
 	if (backup_handle == NULL) {
 		sqlite3_close(temp_handle);
