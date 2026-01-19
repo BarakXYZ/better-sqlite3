@@ -132,6 +132,7 @@ INIT(Database::Init) {
 	SetPrototypeMethod(isolate, data, t, "exec", JS_exec);
 	SetPrototypeMethod(isolate, data, t, "backup", JS_backup);
 	SetPrototypeMethod(isolate, data, t, "serialize", JS_serialize);
+	SetPrototypeMethod(isolate, data, t, "deserialize", JS_deserialize);
 	SetPrototypeMethod(isolate, data, t, "function", JS_function);
 	SetPrototypeMethod(isolate, data, t, "aggregate", JS_aggregate);
 	SetPrototypeMethod(isolate, data, t, "table", JS_table);
@@ -293,6 +294,100 @@ NODE_METHOD(Database::JS_serialize) {
 	info.GetReturnValue().Set(
 		SAFE_NEW_BUFFER(isolate, reinterpret_cast<char*>(data), length, FreeSerialization, NULL).ToLocalChecked()
 	);
+}
+
+NODE_METHOD(Database::JS_deserialize) {
+	// Deserialize a buffer into the current database using the safe pattern:
+	// 1. Create temp in-memory database
+	// 2. Deserialize buffer into temp
+	// 3. Backup from temp to current database
+	// 4. Close temp database
+	//
+	// This preserves file-based persistence and matches wa-sqlite's import pattern.
+	// REF: packages/@livestore/sqlite-wasm/src/make-sqlite-db.ts import implementation
+	// REF: packages/@livestore/wa-sqlite/src/sqlite-api.js backup function
+
+	Database* db = Unwrap<Database>(info.This());
+	REQUIRE_DATABASE_OPEN(db);
+	REQUIRE_DATABASE_NOT_BUSY(db);
+	REQUIRE_DATABASE_NO_ITERATORS(db);
+
+	UseAddon;
+	UseIsolate;
+
+	// First argument: buffer containing serialized database
+	v8::Local<v8::Value> bufferArg = info[0];
+	if (!node::Buffer::HasInstance(bufferArg)) {
+		ThrowTypeError("Expected first argument to be a buffer");
+		return;
+	}
+	v8::Local<v8::Object> buffer = bufferArg.As<v8::Object>();
+
+	// Second argument: attached database name (default "main")
+	v8::Local<v8::String> attachedName;
+	if (info.Length() > 1 && !info[1]->IsUndefined()) {
+		if (!info[1]->IsString()) {
+			ThrowTypeError("Expected second argument to be a string");
+			return;
+		}
+		attachedName = info[1].As<v8::String>();
+	} else {
+		attachedName = StringFromUtf8(isolate, "main", -1);
+	}
+	v8::String::Utf8Value attached_name(isolate, attachedName);
+
+	// Step 1: Create a temporary in-memory database
+	sqlite3* temp_handle;
+	int status = sqlite3_open_v2(":memory:", &temp_handle, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, NULL);
+	if (status != SQLITE_OK) {
+		ThrowSqliteError(addon, "Failed to create temporary database", status);
+		return;
+	}
+
+	// Step 2: Deserialize the buffer into the temporary database
+	size_t length = node::Buffer::Length(buffer);
+	unsigned char* data = (unsigned char*)sqlite3_malloc64(length);
+	unsigned int flags = SQLITE_DESERIALIZE_FREEONCLOSE | SQLITE_DESERIALIZE_RESIZEABLE;
+
+	if (length) {
+		if (!data) {
+			sqlite3_close(temp_handle);
+			ThrowError("Out of memory");
+			return;
+		}
+		memcpy(data, node::Buffer::Data(buffer), length);
+	}
+
+	status = sqlite3_deserialize(temp_handle, "main", data, length, length, flags);
+	if (status != SQLITE_OK) {
+		sqlite3_close(temp_handle);
+		ThrowSqliteError(addon, status == SQLITE_ERROR ? "unable to deserialize database" : sqlite3_errstr(status), status);
+		return;
+	}
+
+	// Step 3: Backup from temp to current database
+	// sqlite3_backup_init(dest, destName, source, sourceName)
+	// REF: wa-sqlite sqlite-api.js - backup(dest, destName, source, sourceName)
+	sqlite3_backup* backup_handle = sqlite3_backup_init(db->db_handle, *attached_name, temp_handle, "main");
+	if (backup_handle == NULL) {
+		sqlite3_close(temp_handle);
+		db->ThrowDatabaseError();
+		return;
+	}
+
+	// Copy all pages in one step (-1 = all pages)
+	status = sqlite3_backup_step(backup_handle, -1);
+	sqlite3_backup_finish(backup_handle);
+
+	// Step 4: Close temporary database
+	sqlite3_close(temp_handle);
+
+	if (status != SQLITE_DONE) {
+		ThrowSqliteError(addon, "Failed to restore database from buffer", status);
+		return;
+	}
+
+	info.GetReturnValue().Set(info.This());
 }
 
 NODE_METHOD(Database::JS_function) {

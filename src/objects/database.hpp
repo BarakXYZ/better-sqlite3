@@ -81,6 +81,7 @@ private:
 	static NODE_METHOD(JS_exec);
 	static NODE_METHOD(JS_backup);
 	static NODE_METHOD(JS_serialize);
+	static NODE_METHOD(JS_deserialize);
 	static NODE_METHOD(JS_function);
 	static NODE_METHOD(JS_aggregate);
 	static NODE_METHOD(JS_table);

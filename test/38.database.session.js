@@ -21,6 +21,7 @@ describe('Database#createSession()', function () {
 		expect(session).to.be.an('object');
 		expect(session.attach).to.be.a('function');
 		expect(session.changeset).to.be.a('function');
+		expect(session.enable).to.be.a('function');
 		expect(session.close).to.be.a('function');
 		session.close();
 	});
@@ -92,6 +93,105 @@ describe('Session#attach()', function () {
 		const changeset = this.session.changeset();
 		expect(changeset).to.be.an.instanceof(Buffer);
 		expect(changeset.length).to.be.above(0);
+	});
+});
+
+describe('Session#enable()', function () {
+	beforeEach(function () {
+		this.db = new Database(util.next());
+		this.db.prepare('CREATE TABLE entries (a TEXT, b INTEGER PRIMARY KEY)').run();
+		this.session = this.db.createSession();
+		this.session.attach('entries');
+	});
+	afterEach(function () {
+		this.session.close();
+		this.db.close();
+	});
+
+	it('should throw when given a non-boolean argument', function () {
+		expect(() => this.session.enable()).to.throw(TypeError);
+		expect(() => this.session.enable(null)).to.throw(TypeError);
+		expect(() => this.session.enable(123)).to.throw(TypeError);
+		expect(() => this.session.enable('true')).to.throw(TypeError);
+		expect(() => this.session.enable({})).to.throw(TypeError);
+	});
+	it('should throw when the session has been closed', function () {
+		this.session.close();
+		expect(() => this.session.enable(true)).to.throw(TypeError);
+	});
+	it('should track changes when enabled', function () {
+		this.session.enable(true);
+		this.db.prepare("INSERT INTO entries VALUES ('foo', 1)").run();
+		this.session.enable(false);
+		const changeset = this.session.changeset();
+		expect(changeset).to.be.an.instanceof(Buffer);
+		expect(changeset.length).to.be.above(0);
+	});
+	it('should not track changes when disabled', function () {
+		// Session starts enabled by default, so disable first
+		this.session.enable(false);
+		this.db.prepare("INSERT INTO entries VALUES ('foo', 1)").run();
+		const changeset = this.session.changeset();
+		// When disabled during changes, no changeset is captured
+		expect(changeset).to.be.undefined;
+	});
+	it('should allow toggling enable state multiple times', function () {
+		this.session.enable(true);
+		this.session.enable(false);
+		this.session.enable(true);
+		this.session.enable(false);
+		// Should not throw
+	});
+	it('should only capture changes made while enabled', function () {
+		// Disable first
+		this.session.enable(false);
+		this.db.prepare("INSERT INTO entries VALUES ('not-tracked', 1)").run();
+
+		// Enable and make tracked changes
+		this.session.enable(true);
+		this.db.prepare("INSERT INTO entries VALUES ('tracked', 2)").run();
+		this.session.enable(false);
+
+		// Make more untracked changes
+		this.db.prepare("INSERT INTO entries VALUES ('also-not-tracked', 3)").run();
+
+		const changeset = this.session.changeset();
+		expect(changeset).to.be.an.instanceof(Buffer);
+		expect(changeset.length).to.be.above(0);
+
+		// Verify by applying inverted changeset - only the tracked row should be removed
+		this.db.applyChangeset(this.db.invertChangeset(changeset));
+		const rows = this.db.prepare('SELECT * FROM entries ORDER BY b').all();
+		expect(rows).to.deep.equal([
+			{ a: 'not-tracked', b: 1 },
+			{ a: 'also-not-tracked', b: 3 },
+		]);
+	});
+	it('should work with multiple sessions independently', function () {
+		const session2 = this.db.createSession();
+		session2.attach('entries');
+
+		// Enable session1, disable session2
+		this.session.enable(true);
+		session2.enable(false);
+
+		this.db.prepare("INSERT INTO entries VALUES ('session1-only', 1)").run();
+
+		// Swap: disable session1, enable session2
+		this.session.enable(false);
+		session2.enable(true);
+
+		this.db.prepare("INSERT INTO entries VALUES ('session2-only', 2)").run();
+
+		const changeset1 = this.session.changeset();
+		const changeset2 = session2.changeset();
+
+		expect(changeset1).to.be.an.instanceof(Buffer);
+		expect(changeset2).to.be.an.instanceof(Buffer);
+		// They should be different (tracking different changes)
+		expect(changeset1.equals(changeset2)).to.be.false;
+
+		session2.close();
 	});
 });
 

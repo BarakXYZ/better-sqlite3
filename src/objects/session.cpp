@@ -30,6 +30,7 @@ INIT(Session::Init) {
 	v8::Local<v8::FunctionTemplate> t = NewConstructorTemplate(isolate, data, JS_new, "Session");
 	SetPrototypeMethod(isolate, data, t, "attach", JS_attach);
 	SetPrototypeMethod(isolate, data, t, "changeset", JS_changeset);
+	SetPrototypeMethod(isolate, data, t, "enable", JS_enable);
 	SetPrototypeMethod(isolate, data, t, "close", JS_close);
 	return t->GetFunction(OnlyContext).ToLocalChecked();
 }
@@ -90,6 +91,24 @@ NODE_METHOD(Session::JS_attach) {
 			session->db->ThrowDatabaseError();
 		}
 	}
+}
+
+NODE_METHOD(Session::JS_enable) {
+	Session* session = Unwrap<Session>(info.This());
+	if (!session->alive) return ThrowTypeError("The session has been closed");
+	REQUIRE_DATABASE_OPEN(session->db->GetState());
+
+	UseIsolate;
+
+	// Require a boolean argument (matches wa-sqlite API pattern)
+	if (info.Length() < 1 || !info[0]->IsBoolean()) {
+		return ThrowTypeError("Expected first argument to be a boolean");
+	}
+
+	int enable_flag = info[0]->BooleanValue(isolate) ? 1 : 0;
+	sqlite3session_enable(session->session_handle, enable_flag);
+
+	// Return void (matches wa-sqlite API)
 }
 
 // Custom destructor for sqlite3_free

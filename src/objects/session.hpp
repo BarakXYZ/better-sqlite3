@@ -24,6 +24,7 @@ private:
 	static NODE_METHOD(JS_new);
 	static NODE_METHOD(JS_attach);
 	static NODE_METHOD(JS_changeset);
+	static NODE_METHOD(JS_enable);
 	static NODE_METHOD(JS_close);
 
 	Database* const db;
