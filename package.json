@@ -1,6 +1,6 @@
 {
   "name": "@barakxyz/better-sqlite3",
-  "version": "12.7.0",
+  "version": "12.8.0",
   "description": "The fastest and simplest library for SQLite in Node.js. Fork with session extension enabled.",
   "homepage": "https://github.com/BarakXYZ/better-sqlite3",
   "author": "Joshua Wise <joshuathomaswise@gmail.com>",
